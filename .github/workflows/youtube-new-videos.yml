@@ -1,0 +1,94 @@
+name: カイゼンベース YouTube 新着通知
+
+on:
+  schedule:
+    # 1時間ごと（UTC）。GitHub側の混雑で数分ずれることがあります。
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "通知せず、現在の動画をすべて既読にする"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: youtube-new-videos
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 新着をチェック
+        id: check
+        run: |
+          python3 scripts/check_new_videos.py ${{ inputs.seed && '--seed' || '' }}
+
+      - name: 新着ごとに Issue を作成（＝メール通知）
+        if: steps.check.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VIDEOS: ${{ steps.check.outputs.videos }}
+        run: |
+          gh label create youtube-new-video \
+            --repo "$GITHUB_REPOSITORY" \
+            --color 0E8A16 \
+            --description "カイゼンベースYouTubeの新着動画" 2>/dev/null || true
+
+          printf '%s' "$VIDEOS" > /tmp/videos.json
+          count=$(jq 'length' /tmp/videos.json)
+          for i in $(seq 0 $((count - 1))); do
+            title=$(jq -r ".[$i].title" /tmp/videos.json)
+            url=$(jq -r ".[$i].url" /tmp/videos.json)
+            published=$(jq -r ".[$i].published" /tmp/videos.json)
+            description=$(jq -r ".[$i].description" /tmp/videos.json)
+
+            body=$(printf '新しい動画が公開されました。\n\n**%s**\n\n%s\n\n公開日時: %s\n\n<details><summary>概要欄</summary>\n\n%s\n\n</details>\n' \
+              "$title" "$url" "$published" "$description")
+
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "🎬 新着: $title" \
+              --body "$body" \
+              --label youtube-new-video < /dev/null
+          done
+
+      - name: Slack に通知（SLACK_WEBHOOK_URL を設定している場合のみ）
+        if: steps.check.outputs.count != '0' && env.SLACK_WEBHOOK_URL != ''
+        env:
+          VIDEOS: ${{ steps.check.outputs.videos }}
+        run: |
+          printf '%s' "$VIDEOS" > /tmp/videos.json
+          count=$(jq 'length' /tmp/videos.json)
+          for i in $(seq 0 $((count - 1))); do
+            payload=$(jq -c "{text: (\"🎬 カイゼンベースの新着動画: \" + .[$i].title + \"\n\" + .[$i].url)}" /tmp/videos.json)
+            curl -sS -X POST -H 'Content-Type: application/json' -d "$payload" "$SLACK_WEBHOOK_URL"
+          done
+
+      - name: 既読状態をコミット
+        run: |
+          if git diff --quiet -- state/; then
+            echo "状態に変化なし"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/
+          git commit -m "chore: 既読の動画IDを更新"
+          # 同時実行や手動pushとぶつかった場合に備えてリトライする
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            git pull --rebase --autostash
+            sleep $((attempt * 2))
+          done
+          git push
