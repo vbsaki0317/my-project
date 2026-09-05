@@ -19,7 +19,7 @@ import sys
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_CONFIG = os.path.join(REPO_ROOT, "config.json")
@@ -34,9 +34,27 @@ NS = {
     "media": "http://search.yahoo.com/mrss/",
 }
 
+# 通知に出す日時は日本時間で表示する。JSTはサマータイムがないので固定オフセットでよい。
+JST = timezone(timedelta(hours=9), "JST")
+
 # 状態ファイルに残す動画IDの上限。フィードは最新15件しか返さないので、
 # これだけ残しておけば「一度見た動画をまた新着扱いする」ことはまず起きない。
 MAX_SEEN = 500
+
+
+def to_jst(published):
+    """RSSのpublished（UTCのISO8601）を日本時間の表示用文字列にする。"""
+    if not published:
+        return ""
+    text = published.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        # 想定外の形式ならそのまま出す（通知が落ちるより読めない方がマシ）
+        return published
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(JST).strftime("%Y-%m-%d %H:%M (JST)")
 
 
 def log(message):
@@ -78,12 +96,14 @@ def parse_feed(xml_text):
         description = ""
         if group is not None:
             description = group.findtext("media:description", default="", namespaces=NS) or ""
+        published = entry.findtext("atom:published", default="", namespaces=NS)
         videos.append(
             {
                 "video_id": entry.findtext("yt:videoId", default="", namespaces=NS),
                 "title": entry.findtext("atom:title", default="", namespaces=NS),
                 "url": entry.find("atom:link", NS).get("href", ""),
-                "published": entry.findtext("atom:published", default="", namespaces=NS),
+                "published": published,
+                "published_jst": to_jst(published),
                 "description": description,
             }
         )
@@ -179,7 +199,7 @@ def main():
         new_videos.reverse()
 
     for video in new_videos:
-        log(f"新着: {video['title']} — {video['url']}")
+        log(f"新着: {video['title']} ({video['published_jst']}) — {video['url']}")
     if not new_videos and not first_run and not args.seed:
         log("新着はありません")
 
@@ -193,7 +213,7 @@ def main():
             {
                 "channel_id": channel_id,
                 "channel_title": feed_title,
-                "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "updated_at": datetime.now(JST).isoformat(timespec="seconds"),
                 "seen_video_ids": updated_seen[:MAX_SEEN],
             },
         )

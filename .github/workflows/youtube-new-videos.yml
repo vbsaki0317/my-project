@@ -50,7 +50,7 @@ jobs:
           for i in $(seq 0 $((count - 1))); do
             title=$(jq -r ".[$i].title" /tmp/videos.json)
             url=$(jq -r ".[$i].url" /tmp/videos.json)
-            published=$(jq -r ".[$i].published" /tmp/videos.json)
+            published=$(jq -r ".[$i].published_jst" /tmp/videos.json)
             description=$(jq -r ".[$i].description" /tmp/videos.json)
 
             body=$(printf '新しい動画が公開されました。\n\n**%s**\n\n%s\n\n公開日時: %s\n\n<details><summary>概要欄</summary>\n\n%s\n\n</details>\n' \
@@ -71,7 +71,7 @@ jobs:
           printf '%s' "$VIDEOS" > /tmp/videos.json
           count=$(jq 'length' /tmp/videos.json)
           for i in $(seq 0 $((count - 1))); do
-            payload=$(jq -c "{text: (\"🎬 カイゼンベースの新着動画: \" + .[$i].title + \"\n\" + .[$i].url)}" /tmp/videos.json)
+            payload=$(jq -c "{text: (\"🎬 カイゼンベースの新着動画: \" + .[$i].title + \"\n\" + .[$i].url + \"\n公開日時: \" + .[$i].published_jst)}" /tmp/videos.json)
             curl -sS -X POST -H 'Content-Type: application/json' -d "$payload" "$SLACK_WEBHOOK_URL"
           done
 
