@@ -26,6 +26,8 @@ jobs:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 新着をチェック
         id: check
@@ -75,13 +77,13 @@ jobs:
 
       - name: 既読状態をコミット
         run: |
-          if git diff --quiet -- state/; then
+          git add -A state/
+          if git diff --cached --quiet -- state/; then
             echo "状態に変化なし"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state/
           git commit -m "chore: 既読の動画IDを更新"
           # 同時実行や手動pushとぶつかった場合に備えてリトライする
           for attempt in 1 2 3; do
