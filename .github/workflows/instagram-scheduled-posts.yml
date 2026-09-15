@@ -1,0 +1,116 @@
+name: Instagram 予約投稿
+
+on:
+  schedule:
+    # 15分ごと（UTC）。GitHub側の混雑で数分〜数十分ずれることがあります。
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "投稿せず、対象だけ確認する"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: instagram-scheduled-posts
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 予定時刻が来た投稿を実行
+        id: post
+        continue-on-error: true
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+        run: |
+          python3 scripts/post_to_instagram.py ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      - name: 投稿できたことを Issue で知らせる
+        if: steps.post.outputs.posted_count != '0' && steps.post.outputs.posted_count != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          POSTED: ${{ steps.post.outputs.posted }}
+        run: |
+          gh label create instagram-posted \
+            --repo "$GITHUB_REPOSITORY" \
+            --color 0E8A16 \
+            --description "Instagramへの投稿が完了した通知" 2>/dev/null || true
+
+          printf '%s' "$POSTED" > /tmp/posted.json
+          count=$(jq 'length' /tmp/posted.json)
+          for i in $(seq 0 $((count - 1))); do
+            summary=$(jq -r ".[$i].summary" /tmp/posted.json)
+            permalink=$(jq -r ".[$i].permalink" /tmp/posted.json)
+            media_type=$(jq -r ".[$i].media_type" /tmp/posted.json)
+
+            body=$(printf 'Instagramへの投稿が完了しました。\n\n%s\n\n種類: %s\nURL: %s\n' \
+              "$summary" "$media_type" "$permalink")
+
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "✅ 投稿完了: $summary" \
+              --body "$body" \
+              --label instagram-posted < /dev/null
+          done
+
+      - name: 問題があれば Issue で知らせる
+        if: steps.post.outputs.problem_count != '0' && steps.post.outputs.problem_count != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROBLEMS: ${{ steps.post.outputs.problems }}
+        run: |
+          gh label create instagram-problem \
+            --repo "$GITHUB_REPOSITORY" \
+            --color D93F0B \
+            --description "Instagram予約投稿で対応が必要なこと" 2>/dev/null || true
+
+          printf '%s' "$PROBLEMS" > /tmp/problems.json
+          count=$(jq 'length' /tmp/problems.json)
+          list=$(jq -r '.[] | "- **" + .summary + "**\n  " + .detail' /tmp/problems.json)
+
+          body=$(printf '予約投稿で対応が必要な行があります。スプレッドシートを直してください。\n\n%s\n\n実行ログ: %s/%s/actions/runs/%s\n' \
+            "$list" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "⚠️ Instagram予約投稿: 対応が必要な行が ${count} 件あります" \
+            --body "$body" \
+            --label instagram-problem < /dev/null
+
+      - name: 投稿済みの記録をコミット
+        if: always()
+        run: |
+          git add -A state/
+          if git diff --cached --quiet -- state/; then
+            echo "状態に変化なし"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: Instagram投稿済みの記録を更新"
+          # 同時実行や手動pushとぶつかった場合に備えてリトライする
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            git pull --rebase --autostash
+            sleep $((attempt * 2))
+          done
+          git push
+
+      - name: 投稿に失敗していたらワークフローを失敗させる
+        if: steps.post.outcome == 'failure'
+        run: |
+          echo "投稿処理でエラーが発生しました。上のログを確認してください。"
+          exit 1

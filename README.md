@@ -1,5 +1,7 @@
 # カイゼンベース YouTube 新着通知
 
+> このリポジトリには [Instagram 予約投稿](INSTAGRAM.md) の仕組みも入っています。
+
 カイゼンベースのYouTubeチャンネル（[現場の人材教育・カイゼンチャンネル / KAIZEN BASE](https://www.youtube.com/c/Kaizen-base)）に
 新しい動画が公開されたら通知します。
 

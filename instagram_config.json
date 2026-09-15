@@ -1,0 +1,8 @@
+{
+  "csv_url": "",
+  "api_version": "v21.0",
+  "utc_offset_hours": 9,
+  "catchup_hours": 24,
+  "max_posts_per_run": 3,
+  "max_attempts": 3
+}
